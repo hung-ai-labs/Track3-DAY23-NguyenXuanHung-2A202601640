@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
 from typing import Any
 
 
 def build_checkpointer(kind: str = "memory", database_url: str | None = None) -> Any | None:
     """Return a LangGraph checkpointer.
 
-    TODO(student): implement SQLite support for the persistence extension track.
-    The starter provides MemorySaver only — SQLite/Postgres are extension tasks.
+    Memory and SQLite are supported. PostgreSQL is loaded lazily when its optional
+    dependency is installed.
 
     For SQLite:
     - pip install langgraph-checkpoint-sqlite
@@ -23,12 +25,26 @@ def build_checkpointer(kind: str = "memory", database_url: str | None = None) ->
 
         return MemorySaver()
     if kind == "sqlite":
-        raise NotImplementedError(
-            "TODO(student): implement SQLite checkpointer. "
-            "Hint: pip install langgraph-checkpoint-sqlite, then use SqliteSaver"
-        )
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        raw_path = database_url or "outputs/checkpoints.sqlite"
+        path = raw_path.removeprefix("sqlite:///")
+        if path != ":memory:":
+            Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(path, check_same_thread=False)
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=NORMAL")
+        return SqliteSaver(conn=connection)
     if kind == "postgres":
-        raise NotImplementedError(
-            "TODO(student): implement Postgres checkpointer (optional extension)"
-        )
+        if not database_url:
+            raise ValueError("database_url is required for the PostgreSQL checkpointer")
+        try:
+            from langgraph.checkpoint.postgres import (  # type: ignore[import-not-found]
+                PostgresSaver,
+            )
+        except ImportError as exc:
+            raise RuntimeError("Install the 'postgres' project extra") from exc
+        saver = PostgresSaver.from_conn_string(database_url)
+        saver.setup()
+        return saver
     raise ValueError(f"Unknown checkpointer kind: {kind}")

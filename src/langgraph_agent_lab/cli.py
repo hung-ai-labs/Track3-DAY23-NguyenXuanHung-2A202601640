@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Annotated
 
 import typer
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from .graph import build_graph
 from .metrics import MetricsReport, metric_from_state, summarize_metrics, write_metrics
@@ -30,12 +31,22 @@ def run_scenarios(
     checkpointer = build_checkpointer(cfg.get("checkpointer", "memory"), cfg.get("database_url"))
     graph = build_graph(checkpointer=checkpointer)
     metrics = []
+    history_verified = checkpointer is not None
     for scenario in scenarios:
         state = initial_state(scenario)
         run_config = {"configurable": {"thread_id": state["thread_id"]}}
+        started = time.perf_counter()
         final_state = graph.invoke(state, config=run_config)
-        metrics.append(metric_from_state(final_state, scenario.expected_route.value, scenario.requires_approval))
-    report = summarize_metrics(metrics)
+        metric = metric_from_state(
+            final_state, scenario.expected_route.value, scenario.requires_approval
+        )
+        metric.latency_ms = round((time.perf_counter() - started) * 1000)
+        metrics.append(metric)
+        if checkpointer is not None:
+            history_verified = history_verified and bool(
+                next(iter(graph.get_state_history(run_config)), None)
+            )
+    report = summarize_metrics(metrics, resume_success=history_verified)
     write_metrics(report, output)
     if cfg.get("report_path"):
         write_report(report, cfg["report_path"])
